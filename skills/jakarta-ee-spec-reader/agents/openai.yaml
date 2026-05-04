@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jakarta EE Spec Reader"
+  short_description: "Find and read Jakarta EE spec sources"
+  default_prompt: "Use $jakarta-ee-spec-reader to answer this Jakarta EE specification question from the correct spec version or repository tag."
