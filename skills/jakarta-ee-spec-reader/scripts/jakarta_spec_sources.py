@@ -13,7 +13,7 @@ from html.parser import HTMLParser
 
 
 SPEC_INDEX = "https://jakarta.ee/specifications/"
-GITHUB_API = "https://api.github.com/orgs/jakartaee/repos?per_page=100"
+GITHUB_API = "https://api.github.com/orgs/jakartaee/repos"
 
 
 class LinkParser(HTMLParser):
@@ -48,15 +48,35 @@ def fetch_text(url: str) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
+def fetch_json_pages(url: str) -> list[dict[str, object]]:
+    items: list[dict[str, object]] = []
+    page = 1
+    while True:
+        separator = "&" if "?" in url else "?"
+        data = json.loads(fetch_text(f"{url}{separator}per_page=100&page={page}"))
+        if not data:
+            return items
+        items.extend(data)
+        if len(data) < 100:
+            return items
+        page += 1
+
+
 def words(value: str) -> list[str]:
     return [part for part in re.split(r"[^a-z0-9]+", value.lower()) if part]
 
 
 def score(text: str, query_words: list[str], version: str | None) -> int:
     haystack = text.lower()
-    total = sum(3 for word in query_words if word in haystack)
+    haystack_words = set(words(text))
+    total = sum(5 for word in query_words if word in haystack_words)
+    total += sum(1 for word in query_words if word not in haystack_words and word in haystack)
     if version and version.lower() in haystack:
         total += 5
+    if "under development" in haystack:
+        total -= 2
+    if "view more" in haystack:
+        total -= 3
     return total
 
 
@@ -66,35 +86,40 @@ def spec_links(query: str, version: str | None) -> list[tuple[int, str, str]]:
     query_words = words(query)
     results = []
     for text, href in parser.links:
+        if text.strip().lower() == "view more":
+            continue
         url = urllib.parse.urljoin(SPEC_INDEX, href)
         if not url.startswith(SPEC_INDEX):
             continue
         value = f"{text} {url}"
         link_score = score(value, query_words, version)
-        if link_score:
+        if link_score > 0:
             results.append((link_score, text or url, url))
     return sorted(results, reverse=True)[:12]
 
 
 def github_repos(query: str) -> list[tuple[int, str, str]]:
-    repos = json.loads(fetch_text(GITHUB_API))
+    repos = fetch_json_pages(GITHUB_API)
     query_words = words(query)
     results = []
     for repo in repos:
-        value = f"{repo.get('name', '')} {repo.get('description', '')}"
+        name = str(repo.get("name", ""))
+        value = f"{name} {repo.get('description', '')}"
         repo_score = score(value, query_words, None)
-        if repo_score:
-            results.append((repo_score, repo["name"], repo["html_url"]))
+        if query.lower().replace(" ", "-") == name.lower():
+            repo_score += 8
+        if repo_score > 0:
+            results.append((repo_score, name, str(repo["html_url"])))
     return sorted(results, reverse=True)[:12]
 
 
 def tags_for(repo_name: str, version: str | None) -> list[str]:
-    tags_url = f"https://api.github.com/repos/jakartaee/{repo_name}/tags?per_page=100"
+    tags_url = f"https://api.github.com/repos/jakartaee/{repo_name}/tags"
     try:
-        tags = json.loads(fetch_text(tags_url))
+        tags = fetch_json_pages(tags_url)
     except Exception as exc:
         return [f"Could not fetch tags for jakartaee/{repo_name}: {exc}"]
-    names = [tag["name"] for tag in tags]
+    names = [str(tag["name"]) for tag in tags]
     if not version:
         return names[:20]
     version_lower = version.lower()
@@ -106,22 +131,30 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("query", help="Specification or technology name, e.g. servlet, restful web services")
     parser.add_argument("--version", help="Requested specification version, e.g. 6.1 or 4.0")
-    parser.add_argument("--repo-tags", help="Also list likely tags for a jakartaee repository name")
+    parser.add_argument("--repo-tags", metavar="REPO", help="Also list likely tags for a jakartaee repository name")
+    parser.add_argument("--tags", action="store_true", help="Also list likely tags for the top repository match")
     args = parser.parse_args()
 
     try:
         print(f"Specification index: {SPEC_INDEX}")
         print("\nLikely specification pages:")
-        for _, text, url in spec_links(args.query, args.version):
+        specs = spec_links(args.query, args.version)
+        if not specs:
+            print("- No likely specification pages found")
+        for _, text, url in specs:
             print(f"- {text}: {url}")
 
         print("\nLikely jakartaee repositories:")
-        for _, name, url in github_repos(args.query):
+        repos = github_repos(args.query)
+        if not repos:
+            print("- No likely repositories found")
+        for _, name, url in repos:
             print(f"- {name}: {url}")
 
-        if args.repo_tags:
-            print(f"\nTags for jakartaee/{args.repo_tags}:")
-            for tag in tags_for(args.repo_tags, args.version):
+        tag_repo = args.repo_tags or (repos[0][1] if args.tags and repos else None)
+        if tag_repo:
+            print(f"\nTags for jakartaee/{tag_repo}:")
+            for tag in tags_for(tag_repo, args.version):
                 print(f"- {tag}")
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
