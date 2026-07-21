@@ -40,11 +40,27 @@ The script will:
 | Check | 🔴 Failure means |
 |---|---|
 | SHA hash mismatch | File was corrupted/tampered — **DO NOT VOTE +1** |
-| GPG bad signature | Artifact not signed by a KEYS-file key — **DO NOT VOTE +1** |
+| GPG bad signature | Signature does not match the artifact — **DO NOT VOTE +1** |
+| `Signing key NOT in KEYS file` | Key is valid but absent from the project KEYS file, so the signature is **unverifiable** — **DO NOT VOTE +1**. Ask the RM to append the key to `dist/release/PROJECT/KEYS`; artifacts do not need re-rolling |
 | Maven signature invalid | POM/jar in staging repo may be compromised |
 | KEYS file unreachable | Cannot verify signing key authenticity |
 
 The GPG warning `"This key is not certified with a trusted signature"` is **normal** — it means only that you haven't personally built a trust path to the key. As long as `"Good signature"` appears and the key is in the official KEYS file, the check passes.
+
+### Keyring isolation
+
+The script runs GPG under a throwaway `GNUPGHOME` inside the work directory and deletes it on exit. Your default keyring is never read or written.
+
+This is a correctness requirement, not just hygiene: if verification ran against your default keyring, a key already imported there for unrelated reasons would satisfy `gpg --verify` **even when that key is absent from the project KEYS file**. The run would report `Good signature` for a release nobody can actually verify. Never reintroduce a bare `gpg` call that inherits the caller's `GNUPGHOME`.
+
+When checking signatures by hand outside the script, isolate the same way:
+
+```bash
+export GNUPGHOME=$(mktemp -d) && chmod 700 "$GNUPGHOME"
+gpg --import KEYS
+gpg --verify artifact.zip.asc artifact.zip
+gpgconf --kill all; rm -rf "$GNUPGHOME"
+```
 
 ### 4. Additional Manual Checks
 

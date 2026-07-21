@@ -144,6 +144,24 @@ else
     CLEANUP=false
 fi
 
+# ----------------------------------------------------------------
+# Isolated GPG keyring
+#
+# NEVER use the caller's default keyring. A key already present there
+# from an unrelated import will satisfy `gpg --verify` even when it is
+# absent from the project KEYS file, turning an unverifiable signature
+# into a false "Good signature".
+# ----------------------------------------------------------------
+export GNUPGHOME="$OUTPUT_DIR/gnupg"
+mkdir -p "$GNUPGHOME"
+chmod 700 "$GNUPGHOME"
+
+gpg_cleanup() {
+    gpgconf --kill all >/dev/null 2>&1 || true
+    rm -rf "$GNUPGHOME"
+}
+trap gpg_cleanup EXIT INT TERM
+
 LOG="$OUTPUT_DIR/verification.log"
 RESULTS="$OUTPUT_DIR/results.md"
 exec 3>&1 4>&2
@@ -175,7 +193,13 @@ else
     echo -e "  ${FAIL} Failed to download KEYS file from $KEYS_URL"
     exit 1
 fi
-gpg --import --no-permission-warning "$KEYS_FILE" 2>&1 | grep -E "(imported|not changed|Total number)" | sed 's/^/  /'
+gpg --import --no-permission-warning "$KEYS_FILE" 2>&1 | grep -E "(imported|Total number)" | sed 's/^/  /'
+IMPORTED_KEYS=$(gpg --list-keys --with-colons 2>/dev/null | grep -c '^pub' || true)
+echo -e "  ${PASS} Isolated keyring holds $IMPORTED_KEYS keys (default keyring untouched)"
+if [ "$IMPORTED_KEYS" -eq 0 ]; then
+    echo -e "  ${FAIL} No keys imported from KEYS -- every signature check would be unverifiable"
+    exit 1
+fi
 echo ""
 
 # ----------------------------------------------------------------
@@ -253,7 +277,7 @@ echo ""
 # ----------------------------------------------------------------
 echo -e "${CYAN}${BOLD}[4/5] Verifying GPG signatures${NC}"
 
-SIG_FAIL=0; SIG_PASS=0
+SIG_FAIL=0; SIG_PASS=0; SIG_NOKEY=0
 SIGNER=""; SIGNER_KEY=""; SIGNER_TIME=""
 
 for f in "${ARTIFACTS[@]}"; do
@@ -269,6 +293,13 @@ for f in "${ARTIFACTS[@]}"; do
             SIGNER_TIME=$(echo "$VERIFY_OUTPUT" | grep "^gpg: Signature made" | sed 's/^gpg: Signature made //' || true)
         fi
         $VERBOSE && echo -e "  ${PASS} Good signature: $f"
+    elif echo "$VERIFY_OUTPUT" | grep -q "No public key"; then
+        MISSING_KEY=$(echo "$VERIFY_OUTPUT" | grep -oE "key [0-9A-Fa-f]{16,40}" | sed 's/^key //' | head -1 || true)
+        echo -e "  ${FAIL} Signing key NOT in KEYS file: $f"
+        echo "    Signed by $MISSING_KEY, which is absent from $KEYS_URL"
+        echo "    Signature is UNVERIFIABLE -- do not treat as valid."
+        SIG_NOKEY=$((SIG_NOKEY + 1))
+        SIG_FAIL=$((SIG_FAIL + 1))
     else
         echo -e "  ${FAIL} Bad signature: $f"
         echo "    $VERIFY_OUTPUT" | head -3
@@ -280,6 +311,7 @@ echo ""
 echo "  Signature verification results:"
 echo "    ${PASS} Good: $SIG_PASS"
 [ "$SIG_FAIL" -gt 0 ] && echo "    ${FAIL} Bad: $SIG_FAIL"
+[ "$SIG_NOKEY" -gt 0 ] && echo "    ${FAIL} Unverifiable (signing key not in KEYS): $SIG_NOKEY"
 echo ""
 if [ -n "$SIGNER" ]; then
     echo "  Signer: $SIGNER"
