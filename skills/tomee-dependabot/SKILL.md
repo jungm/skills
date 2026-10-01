@@ -20,7 +20,9 @@ Derive the branch's EE version from its project version (`git show origin/<branc
 | Tomcat | 11.0.x | 10.1.x |
 | MyFaces | 4.1.x | 4.0.x |
 | Mojarra (`org.glassfish:jakarta.faces`) | 4.1.x | 4.0.x |
-| ActiveMQ | 6.3.x | 6.2.x |
+| ActiveMQ | 6.3.x | 6.3.x (see below) |
+
+ActiveMQ is not bound to the EE version the way the components above are. Both 6.2 and 6.3 build against Jakarta Messaging 3.1 on Java 17. The modules TomEE ships (broker, client, jdbc-store, openwire-legacy, ra) depend only on `jakarta.jms-api`, `jakarta.annotation-api` and `jakarta.resource-api`, and TomEE provides those API jars at its own EE level. 6.3's EE 11 dependencies (Servlet 6.1, EL 6.0, Jetty 12, Spring 7) come only from the web console and the HTTP transport, which TomEE does not ship. tomee-10.x moved to 6.3.2 because CVE-2026-74761 is fixed in no 6.2.x release (TOMEE-4721, apache/tomee#3011). Before a future ActiveMQ minor on either branch, compare `jakarta-jms-api-version` and `javaVersion` in the new `activemq-parent` pom, and the non-test dependencies of those five modules, with the branch's platform.
 
 For a component missing from the table, read the spec version off its release notes or project page (Tomcat publishes it at https://tomcat.apache.org/whichversion.html) and compare it with the spec version the branch's platform lists.
 
